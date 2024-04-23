@@ -1,0 +1,9 @@
+file=SalinasA_correct.mat
+cost=L^1
+n_atoms=24
+mu=0.01
+reg=0.08
+n_restarts=1
+max_iter=400
+sample size=1002
+num clusters=6
