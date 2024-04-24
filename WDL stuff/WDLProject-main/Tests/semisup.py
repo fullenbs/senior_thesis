@@ -316,7 +316,8 @@ def ssl_batch_error_update(rho=0.01, init_points=1):
     new_cmap = cmap_init_marker()
     plt.imshow(coloring, cmap=new_cmap)
     plt.title('Accuracy = ' + str(round(acc, 2)))
-    plt.show()
+    plt.savefig('ssl_batch_test/rho=' + str(rho) + '_init_points=' + str(init_points) + '.pdf',
+                bbox_inches='tight')
     plt.clf()
 
 
@@ -327,4 +328,4 @@ if __name__ == '__main__':
     pts = [1, 5, 10, 25, 50, 100]
     for r in rhos:
         for p in pts:
-            ssl_assign_all(rho=r, init_points=p)
+            ssl_batch_error_update(rho=r, init_points=p)
