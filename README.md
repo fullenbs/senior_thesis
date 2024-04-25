@@ -18,6 +18,6 @@ I recommend a Conda environment to maintain. Scripts to run experiments on Salin
 
 The code was also run using ```Python 3.9.15```
 
-These experiments also overlap with the experiments performed in the WDL_HSI repo linked here: https://github.com/fullenbs/WDL_HSI/tree/main 
+These experiments also overlap with the experiments performed in the WDL_HSI repo linked here: https://github.com/fullenbs/WDL_HSI
 
 That README currently has instructions for replicating those related experiments, and again a comprehensive writeup of the rest of the code will be coming soon. 
