@@ -229,14 +229,12 @@ def ssl_batch_error_update(rho=0.01, init_points=1):
     idx = torch.load(dir_name + '/train_index.pt').numpy()
     num_points = idx.shape[0]
 
-    #Needed initialization information
     remap = {0: 0, 1: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6}
     labels = [1, 2, 3, 4, 5, 6]
     (gt_data, mask) = helper.gt_and_mask(remap)
-    (all_points, point_grouping, weights) = get_init_points(10, gt_data, labels, idx, X, random=True)
-    dup_point = all_points.copy()    
+    (all_points, point_grouping, weights) = get_init_points(init_points, gt_data, labels, idx, X, rand_mark=True)
+    dup_point = all_points.copy()
     weight_d_tracker = [np.zeros((num_points, init_points)) for i in range(0, 6)]
-    #On scale, spatial-norm dominates, so meant to scale things down
     
     s_norm = 100
     
@@ -313,6 +311,7 @@ def ssl_batch_error_update(rho=0.01, init_points=1):
         if i in dup_point:
             coloring[i] = 7
 
+    coloring = np.reshape(coloring, (83, 86))
     new_cmap = cmap_init_marker()
     plt.imshow(coloring, cmap=new_cmap)
     plt.title('Accuracy = ' + str(round(acc, 2)))
