@@ -3,6 +3,7 @@ import random
 import helper
 import torch
 import math
+import time
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib import cm
@@ -130,16 +131,30 @@ def ssl_solo_act(point_find, rho=0.05, init_points=25):
 
     #Needed initialization information
     remap = {0: 0, 1: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6}
-    labels = [1, 2, 3, 4, 5, 6]
     (gt_data, mask) = helper.gt_and_mask(remap)
-    (all_points, point_grouping, weights) = get_init_points(init_points, gt_data, labels, idx, X, rand_mark=True)
+    (C, pts) = kmeans_init(X, init_points, idx)
+
+    all_points = set()
+    point_grouping = [set() for i in range(0, 6)]
+
+    for i in pts: 
+        k = int(i)
+        all_points.add(k)
+        point_grouping[gt_data[k][0] - 1].add(k)
     dup_point = all_points.copy()
+    init_sizes = [len(sub_list) for sub_list in point_grouping]
+    point_grouping = [list(point_grouping[i]) for i in range(0, 6)]
+
+    weights = [np.zeros((32,init_sizes[i])) for i in range(0, 6)]
+
+    for i in range(0, 6): 
+        for j in point_grouping[i]: 
+            weights[i][:,0] = X[:,np.where(idx == j)[0][0]]
     weight_d_tracker = [np.zeros((num_points, init_points)) for i in range(0, 6)]
+
     #On scale, spatial-norm dominates, so meant to scale things down
-    
     s_norm = 100
     
-    #SCORE UPDATE LOOP
     #UPDATE 2, add only certain points
     acc = 0
     for marking in range(0, point_find): 
@@ -211,7 +226,7 @@ def ssl_solo_act(point_find, rho=0.05, init_points=25):
     coloring = np.reshape(coloring, (83, 86))
     new_cmap = cmap_init_marker()
     plt.imshow(coloring, cmap=new_cmap)
-    plt.savefig('point_fixer3_rho=' + str(rho) + '_init_points=' + str(init_points) + '_acc=' + 
+    plt.savefig('kmeans_init_rho=' + str(rho) + '_init_points=' + str(init_points) + '_acc=' + 
                 str(round(acc, 2)) +  '.pdf',
                 bbox_inches='tight')
     plt.clf()
@@ -314,11 +329,54 @@ def ssl_batch_error_update(rho=0.01, init_points=1):
     plt.clf()
 
 
+def kmeans_init(data, k, idx_track):
+    d = data.shape[0]
+    n = data.shape[1]
+    C = np.zeros((d, k))
+
+    idx_track = list(idx_track)
+    idxes = list(range(n))
+    idx_temp = np.zeros(k)
+    a_1 = np.random.choice(n, 1)[0]
+    idx_temp[0] = idx_track[int(a_1)]
+    C[:,0] = data[:,a_1]
+
+    for i in range(1, k):
+        p = np.zeros(n - i)
+
+        # compute distances to centroids
+        for j in range(n - i):
+            idx = idxes[j]
+            p[j] = 100000
+            for l in range(0, k): 
+                d = np.linalg.norm(C[:,l] - data[:,idx])
+                if d < p[j]:
+                    p[j] = d
+        p /= p.sum()
+
+        # pick new centroid
+        new_centroid_idx = np.random.choice(n - i, 1, p=p)[0]
+        idx_temp[i] = idx_track[int(new_centroid_idx)]
+        C[:,i] = data[:, new_centroid_idx]
+        del idxes[new_centroid_idx]
+        del idx_track[new_centroid_idx]
+    return (C, idx_temp)
+
 if __name__ == '__main__':  
-    ssl_solo_act(point_find=1000, rho=0.5, init_points=1)
-    # rhos = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 
-    #         1]
-    # pts = [1, 5, 10, 25, 50, 100]
-    # for r in rhos:
-    #     for p in pts:
-    #         ssl_batch_error_update(rho=r, init_points=p)
+    dir_name = 'random_sample_tests/random_samp_32/random_sample_k=32_mu=0.0001_reg=0.08'
+    X = torch.load(dir_name + '/coeff.pt').numpy()
+    dist = np.zeros((2673, 2673))
+    start = time.time()
+    for i in range(0, 2673): 
+        for j in range(0, 2673): 
+            if i <= j: 
+                d = np.linalg.norm(dist[:,i] - dist[:,j])
+                dist[i, j] = d
+                dist[j, i] = d
+        if i % 100 == 0: 
+            print(i)
+    end = time.time()
+    np.save('dist_mat', dist)
+    print('run time: ', end - start)
+    print(X.shape)
+    

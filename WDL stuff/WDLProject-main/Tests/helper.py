@@ -528,8 +528,8 @@ def synthetic_experiments(reg=0.001, mu=0, lm=True, dir_name='test', mode='gauss
     #Atom creation
     test = np.zeros((2, size))
     if mode == 'gauss':
-        test[0,:] = ot.datasets.make_1D_gauss(size, m=50, s=5)
-        test[1,:] = ot.datasets.make_1D_gauss(size, m=130, s=10)
+        test[0,:] = ot.datasets.make_1D_gauss(size, m=40, s=5)
+        test[1,:] = ot.datasets.make_1D_gauss(size, m=140, s=12)
     else: 
         test[0,:] = uniform(200, 20, 80)
         #test[1,:] = uniform(200, 130, 150)
@@ -955,8 +955,8 @@ def basic_pdf_plot(data, savename, v_size, ylim=[0,1], inv=False):
     #plt.tick_params(axis='both', which='major', labelsize=22) # Major ticks
     plt.plot(data)
     plt.ylim(ylim[0], ylim[1])
-    #plt.savefig(savename, bbox_inches='tight')
-    plt.savefig(savename)
+    plt.savefig(savename, bbox_inches='tight')
+    #plt.savefig(savename)
     plt.clf()
 
 def tsne(dir_name, comp=2, n_labels=6):
@@ -1215,15 +1215,32 @@ if __name__ == "__main__":
     # torch.set_default_dtype(torch.float64) 
     # np.set_printoptions(suppress=True) #Indices are 1045, 1046 of outliers
 
-    # for path in pathlib.Path(os.getcwd() + '/WDL_150').iterdir():
-    #     temp = str(path)
-    #     print(temp)
-    #     if 'big' in temp: 
-    #         os.remove(temp + '/nn_results_loose.npy')
+    #12 is true label 10 is wrong label 
+    X = data_loader('data')
+    Y = data_loader('gt')
+    Y_2 = set(Y.flatten())
+    # print(Y_2)
+    # for i in range(0, len(Y)): 
+    #     if Y[i] == 10: 
+    #         Y[i] = 0
+    # Y = np.reshape(Y, (83, 86))
+    
+    # plt.imshow(Y)
+    # plt.show()
+    # plt.clf()
+    X = X/X.sum(axis=1)[:,None]
+    X1 = np.zeros((201, 1))
+    X2 = np.zeros((201, 1))
 
-    X = data_loader('true')
-    for i in range(0, 204): 
-        plt.imshow(X[:,:,i], cmap='viridis')
-        plt.tick_params(left = False, right = False, labelleft = False, labelbottom = False, bottom = False) 
-        plt.savefig('slices/num=' + str(i) + '.pdf', bbox_inches='tight')
-        plt.clf()
+    for i in range(0, X.shape[0]): 
+        K = X[i,:].reshape(-1, 1)
+        if Y[i] == 10: 
+            X1 = np.append(X1, K, axis=1)
+        if Y[i] == 12:
+            X2 = np.append(X2, K, axis=1)
+    print(X1.shape, X2.shape)
+    plt.plot(X1, color='red') #Wrong label that gets split
+    plt.plot(X2, color='blue') #True label
+    plt.show()
+
+
