@@ -1,0 +1,7 @@
+cost=L^1
+n_atoms=32
+mu=0.0001
+reg=0.08
+n_restarts=2
+max_iter=400
+sample size=2000

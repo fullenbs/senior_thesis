@@ -14,17 +14,12 @@ import csv
 import shutil
 import pathlib
 import argparse
-import time
 from statistics import mode
-from pptx import Presentation
-from pptx.util import Inches
-from matplotlib import gridspec
 sys.path.insert(0, os.path.abspath('../../'))
 
 from wdl.bregman import barycenter
 from wdl.WDL import WDL
 from wdl.WDL import histRegression
-
 from wdl.bregman import bregmanBary
 
 from sklearn.decomposition import PCA
@@ -34,6 +29,11 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import confusion_matrix
 from sklearn.neighbors import kneighbors_graph
 from scipy.optimize import linear_sum_assignment
+
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.neighbors import NearestNeighbors
 
 #Data file names, made as global variables for ease of use
 fname = 'SalinasA_correct.mat'
@@ -122,7 +122,7 @@ def wdl_instance(k=2, train_size=100, dir_name='testing', reg=0.05, mu=0.1,
                  max_iters=50, n_restarts=1, lr=0.01, cost_power=1, mode='train_classes', 
                  n_clusters=2, label_hard=[], training_data='', dummy=''):
     dev = torch.device('cpu') #if torch.cuda.is_available() else torch.device("cpu")
-    #torch.set_default_dtype(torch.float64) 
+    torch.set_default_dtype(torch.float64) 
 
     if dummy == '':
         storage(dir_name) #All results saved to dir_name
@@ -226,7 +226,7 @@ def sample(X, size, mode='train_classes', n_labels=0, label_hard=[]):
     elif 'true_random' in mode: #Only verifies data labeled, just gets random
         while len(lst) < size: 
             val = random.randint(0, gt_data.shape[0] - 1)
-            if gt_data[val][0] != 0 and modif(mode, val):
+            if modif(mode, val):
                 lst.add(val)
                 classes.add(gt_data[val][0])
     elif 'everything' in mode: 
@@ -252,7 +252,8 @@ def sample(X, size, mode='train_classes', n_labels=0, label_hard=[]):
         return (samp, lst, train_labels)
     else:
         return (samp, lst, label_hard)
-    
+
+#Checker function for sampling
 def modif(mode, index): 
     if '++' in mode: 
         if index == 1045 or index == 1046: 
@@ -305,12 +306,10 @@ def spectral_cluster(X, n_components):
 #constraint: loose/tight/other, etc.
 def kneighbor_weights(W, neighbors, constraint):
     W = W.T
-    
     A = kneighbors_graph(W, neighbors, mode='connectivity', include_self=True)
     A = A.toarray()
     
     #What A_ij represents for each mode: 
-    #None: None
     #tight: 1 if both are NN of each other, 0 otherwise
     #loose: 1 if at least one of them is NN, 0 otherwise
     if constraint == 'none': 
@@ -348,18 +347,13 @@ def path_convert(path_temp):
 #train_mode: 'global'= using same data for everything, so loads that in. 
 #recon: Will get reconstructions of training data if true. 
 #For understanding, the run is clustering_loop(par_dir='/Salinas_A_experiments')
-def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='', 
-                    savename='', train_mode='global', recon=False, savemode='HPC'):
+def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='', train_mode='global', 
+                    recon=False):
     
     #Sets up the color map, remap gt labels for ease of use
     remap = {0: 0, 1: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6}
-    #remap = {0: 0, 1: 1, 11: 2, 12: 3, 13: 4, 14: 5, 10: -1}
-    cmap = cm.get_cmap('viridis', 7)
-    new_cmap = mcolors.ListedColormap(cmap.colors)
-    new_cmap.colors[0] = (1, 1, 1, 1)
-
+    new_cmap = virid_modify()
     test_neighbors = [20, 25, 30, 35, 40, 45, 50] #NN we use
-    
     params = np.zeros((len(test_neighbors)*1500, 5)) #Output matrix
     
     #Remaps the GT, and makes a mask for labeled points.
@@ -415,7 +409,7 @@ def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='',
                     index = torch.load(path_temp + '/train_index.pt').numpy()
                 else:
                     index = torch.load('common_index.pt')
-                linear_assignment(labels, index, remap)
+                labels = linear_assignment(labels, index, remap)
                 
                 #Gets accuracy score
                 acc = 0
@@ -435,16 +429,16 @@ def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='',
                 #Plots ground truth
                 train_plot = np.reshape(train_plot, (83, 86))  
                 np.save(path_temp + '/train_plot_data', train_plot)
-                # if  train_mode != 'global' and neighbors == 20: 
-                #     gt_grapher = np.reshape(gt_grapher, (83, 86))
-                #     plt.imshow(gt_grapher, cmap=cmap)
-                #     plt.savefig(path_temp + '/gt.pdf')
-                #     plt.clf()
+                if  train_mode != 'global' and neighbors == 20: 
+                    gt_grapher = np.reshape(gt_grapher, (83, 86))
+                    plt.imshow(gt_grapher, cmap=new_cmap)
+                    plt.savefig(path_temp + '/gt.pdf')
+                    plt.clf()
                 
                 #Runs spatial_NN. It can be slow, so it will only run if
                 #clustering accuracy is above 60%. 
                 relabel = spatial_NN(train_plot, 10, mask, run_mode='NN')
-                colors = cmap(np.linspace(0, 1, cmap.N))
+                colors = cmap(np.linspace(0, 1, new_cmap.N))
                 new_cmap = mcolors.ListedColormap(colors)
 
                 plt.imshow(relabel, cmap=new_cmap)
@@ -464,16 +458,13 @@ def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='',
                 p = str(round(acc_2, 2))
                 plt.imshow(relabel, cmap=new_cmap)
                 plt.tick_params(left = False, right = False, labelleft = False, labelbottom = False, bottom = False) 
-                #plt.title('Relabeling acc=' + p)
                 plt.savefig(path_temp + '/relabel_init_nn=' + str(neighbors) + '_acc=' + p + '.pdf', bbox_inches='tight')
                 plt.clf()
 
                 #Final plot
-                plt.imshow(train_plot, cmap=cmap)
+                plt.imshow(train_plot, cmap=new_cmap)
                 plt.tick_params(left = False, right = False, labelleft = False, 
                 labelbottom = False, bottom = False) 
-                # plt.title('Learned labels ' + 'atoms=' + str(temp_k) + ' mu=' + str(temp_mu) 
-                #             + ' reg=' + str(temp_reg) +  ' accuracy=' + str(round(acc, 2)))
                 plt.savefig(path_temp + '/learned_loose=' + str(round(acc, 2)) + '_NN=' + str(neighbors) + '.pdf'
                             , bbox_inches='tight')
                 plt.clf()
@@ -483,10 +474,6 @@ def clustering_loop(core_dir='big_sample_k=', NN_mode='or', par_dir='',
                 c += 1
     #Removes all rows that are all zeros, and then saves the matrix.
     params = params[~np.all(params == 0, axis=1)] 
-    # if savemode == 'HPC':
-    #     np.save(core_dir + '/NN_results_' + NN_mode, params)
-    # else:
-    #     np.save(os.getcwd() + par_dir + '/NN_results' + savename, params)
 
 
 #Buckets: support, assuming its [0, buckets]
@@ -521,31 +508,38 @@ def synthetic_experiments(reg=0.001, mu=0, lm=True, dir_name='test', mode='gauss
     torch.set_default_dtype(torch.float64) 
     dev = torch.device('cpu')
 
-    dir_check(dir_name)
+   # dir_check(dir_name)
     samp = sample_size + 1
-    size = 200 #Number of buckets 
+    size = 201 #Number of buckets 
 
     #Atom creation
     test = np.zeros((2, size))
     if mode == 'gauss':
         test[0,:] = ot.datasets.make_1D_gauss(size, m=40, s=5)
-        test[1,:] = ot.datasets.make_1D_gauss(size, m=140, s=12)
-    else: 
+        test[1,:] = ot.datasets.make_1D_gauss(size, m=140, s=10)
+    elif mode != 'salinas': 
         test[0,:] = uniform(200, 20, 80)
-        #test[1,:] = uniform(200, 130, 150)
-        #test[0,:] = laplace(200, 60, 6)
         test[1,:] = laplace(200, 140, 4)
+    elif mode == 'salinas': 
+        vals  =  random.sample(range(0, 7138), 2)
+       #vals = [4935, 5850]
+        vals = [1046, 5850]
+        data = data_loader('data')
+        test[0,:] = data[vals[0],:]
+        test[1,:] = data[vals[1],:]
+        test = test/test.sum(axis=1)[:,None]
 
     pca_model = PCA(n_components=2)
     nmf_model = NMF(n_components=2)
 
     #Visualizes synthetic atoms
-
     if mode == 'gauss': 
         bds = [-0.025, 0.1]
+    elif mode == 'salinas': 
+        bds = [-0.005, 0.035]
     else:
         bds = [-0.025, 0.14]
-    basic_pdf_plot(test.T, dir_name + '/synth_atoms_fixed.pdf', 2, ylim=bds, inv=False)
+    #basic_pdf_plot(test.T, dir_name + '/synth_atoms_fixed.pdf', 2, ylim=bds, inv=False)
 
     #Creates the weights for generating the barycenters
     weights = np.zeros((samp, 2))
@@ -577,10 +571,8 @@ def synthetic_experiments(reg=0.001, mu=0, lm=True, dir_name='test', mode='gauss
         basic_pdf_plot(synth_lm, dir_name + '/linear_mixture_fixed.pdf', samp, ylim=bds, inv=True)
 
     #Synthetic data visualization
-    basic_pdf_plot(synth_data.T, dir_name + '/synth_data_fixed.pdf', samp, ylim=bds, inv=True)
+    #basic_pdf_plot(synth_data.T, dir_name + '/synth_data_fixed.pdf', samp, ylim=bds, inv=True)
     np.save(dir_name + '/synth_data', synth_data)
-
-    exit()
 
     #PCA model
     train = pca_model.fit_transform(synth_data) #PCA
@@ -594,32 +586,30 @@ def synthetic_experiments(reg=0.001, mu=0, lm=True, dir_name='test', mode='gauss
 
     #For visualizing, cycler() makes the colors line up
     #PCA components and reconstruction
-    basic_pdf_plot(eigen.T, dir_name + '/PCA_evector_fixed.pdf', 2, ylim=[-0.13,0.2])
-    basic_pdf_plot(inv.T, dir_name + '/PCA_reconstruct_fixed.pdf', samp, ylim=[-0.025,0.1], inv=True)
+    # basic_pdf_plot(eigen.T, dir_name + '/PCA_evector_fixed.pdf', 2, ylim=[-0.13,0.2])
+    # basic_pdf_plot(inv.T, dir_name + '/PCA_reconstruct_fixed.pdf', samp, ylim=[-0.025,0.15], inv=True)
 
     #NMF visualization
-    basic_pdf_plot(H.T, dir_name + '/NMF_components_fixed.pdf', 2, ylim=[-0.025,0.2])
-    basic_pdf_plot(X.T, dir_name + '/NMF_reconstruct_fixed.pdf', samp, ylim=[-0.025,0.1], inv=True)
+    basic_pdf_plot(H.T, dir_name + '/NMF_components_fixed.pdf', 2, ylim=[-0.005, 0.2])
+    #basic_pdf_plot(X.T, dir_name + '/NMF_reconstruct_fixed.pdf', samp, ylim=bds, inv=True)
 
     #Runs WDL, as it's small, you can set n_restarts/max_iters pretty high
     wdl = WDL(n_atoms=2, dir=dir_name)
     synth_data = synth_data.T
     barySolver = barycenter(C=M_old, method="bregman", reg=reg, maxiter=1000)
-    (weights, V_WDL) = WDL_do(dev, wdl, synth_data, M_old, reg, mu, n_restarts=2, max_iters=2000)
+    (weights, V_WDL) = WDL_do(dev, wdl, synth_data, M_old, reg, mu, n_restarts=5, max_iters=500)
     np.save(dir_name + '/atoms', V_WDL)
     np.save(dir_name + '/weights', weights)
 
     #Learned atoms visualization
     #WDL initializes atoms randomly, so you might have to swap colors
-    basic_pdf_plot(V_WDL, dir_name + '/learned_atoms.pdf', 2, ylim=bds)
+    basic_pdf_plot(V_WDL, dir_name + '/learned_atoms.pdf', 2, ylim=[-0.005, 0.08])
 
     #Reconstruction visualization
     rec = np.zeros((V_WDL.shape[0], samp))
     for i in range(weights.shape[1]): #Gets reconstructions
         rec[:,i] = barySolver(V_WDL, weights[:,i]).numpy().reshape(size,)
-
     basic_pdf_plot(rec, dir_name + '/WDL_reconstruct.pdf', samp, ylim=bds)
-    prs_make(dir_name)
 
 #The code was submitted to Tufts HPC using shell scripts 
 #To compartmentalize and make sure things run efficiently, rather than running
@@ -657,12 +647,12 @@ def control_loop():
                         label_hard=[1, 10, 11, 12, 13, 14], training_data='')
 
 
-#Not really a way to define a Boolean one liner
+#Minor helper function for spatial NN
 def Truth(run_mode, element): 
     if run_mode == 'NN' and element == 0: 
         return True 
     elif run_mode == 'relabel' and element != 0: 
-        return True 
+        return True         
     else:
         return False
     
@@ -677,7 +667,7 @@ def Truth(run_mode, element):
 #init_nn: #NN used in learned model 
 #mask: Mask so only getting result on labeled point
 def spatial_NN(X, nn, mask, run_mode='NN'): 
-    #SIt's important that we only use initially labeled pixels when updating the array
+    #It's important that we only use initially labeled pixels when updating the array
     data = np.copy(X)
     c = 0
 
@@ -685,7 +675,6 @@ def spatial_NN(X, nn, mask, run_mode='NN'):
     for i in range(X.shape[0]):
         for j in range(X.shape[1]):
             if Truth(run_mode, X[i,j]): 
-                #3 tracking vars
                 count = 0 # of nn currently added
                 curr_dist = 1 #Distance from (i, j) looking at
                 tracks = np.zeros(nn) #Stores results
@@ -717,15 +706,11 @@ def spatial_NN(X, nn, mask, run_mode='NN'):
 def euc_dist(X, Y, norm): #Euclidean distance for 2d
     return (np.abs(X[0] - Y[0])**norm + np.abs(X[1] - Y[1])**norm)
 
-def grid_dist(X, Y): #Euclidean distance for 2d
-    return max((np.abs(X[0] - Y[0]), np.abs(X[1] - Y[1])))
-
 #For SalinasA, will calculate PCA/NMF for those number of atoms, just load in 
 #data and pass it in to the function.
 def get_pca_nmf(data):
     #All number of atoms/components used 
     arr = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
-    arr = [4]
     for k in arr:
         dir_name = 'PCA_NMF_comparisons/components=' + str(k)
         pca = PCA(n_components=k)
@@ -810,7 +795,6 @@ def clustering_loop_adj(core_dir='testing_k=32', NN_mode='or', par_dir='', train
     for neighbors in test_neighbors: 
         for path in pathlib.Path(os.getcwd() + '/' + par_dir).iterdir():
             path_temp = str(path)
-            #print(core_dir, path_temp)
             #If this is the right directory
             if core_dir in path_temp:
                 #We use a try/except as every once in a while, normalized SC can
@@ -852,8 +836,8 @@ def clustering_loop_adj(core_dir='testing_k=32', NN_mode='or', par_dir='', train
                 plt.imshow(train_plot, cmap=cmap)
                 plt.tick_params(left = False, right = False, labelleft = False, 
                 labelbottom = False, bottom = False) 
-                # plt.savefig(path_temp + '/learned_Acc=' + str(round(acc, 2)) + '_NN=' + str(neighbors) + '.png'
-                #             , bbox_inches='tight')
+                plt.savefig(path_temp + '/learned_Acc=' + str(round(acc, 2)) + '_NN=' + str(neighbors) + '.png'
+                            , bbox_inches='tight')
                 plt.clf()
 
                 X = spatial_NN(train_plot, 10, mask, run_mode='relabel')
@@ -956,7 +940,6 @@ def basic_pdf_plot(data, savename, v_size, ylim=[0,1], inv=False):
     plt.plot(data)
     plt.ylim(ylim[0], ylim[1])
     plt.savefig(savename, bbox_inches='tight')
-    #plt.savefig(savename)
     plt.clf()
 
 def tsne(dir_name, comp=2, n_labels=6):
@@ -972,7 +955,7 @@ def tsne(dir_name, comp=2, n_labels=6):
     X = X.T
     embed = TSNE(n_components=comp, learning_rate='auto', init='random', 
                  perplexity=25).fit_transform(X)
-    index = torch.load(dir_name + '/train_index.pt')
+    index = torch.load('common_index.pt')
 
     km = KMeans(init='k-means++', n_init='auto', n_clusters=n_labels)
     gt_data = data_loader('gt')
@@ -981,25 +964,27 @@ def tsne(dir_name, comp=2, n_labels=6):
     
     gt_temp = np.zeros(len(index))
     for i in range(index.shape[0]):
-        gt_temp[i] = int(gt_data[index[i]])
+        gt_temp[i] = int(gt_data[int(index[i])])
 
     km.fit(embed)
     labels = km.labels_    
     labels = linear_assignment(labels, index, remap)
 
-    #Gets accuracy score
     acc = 0
     for i in range(len(labels)):
         t = index[i]
         j = labels[i]
         if gt_data[t] == j:
             acc += 1
-    #Accuracy percentage, prints out results
     acc = acc/len(labels) 
-    print(dir_name[93:] + ' components accuracy=' + str(acc))
-    plt.scatter(embed[:,0], embed[:,1], c=gt_temp, cmap='viridis')
-    plt.title('TSNE initial data')
-    plt.savefig(dir_name + '/tsne_true.pdf', bbox_inches='tight')
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+
+    print(dir_name[95:])
+    ax.scatter(embed[:,0], embed[:,1], embed[:,2], c=gt_temp, cmap='viridis')
+    plt.title('TSNE by true label')
+    plt.savefig(dir_name + '/tsne_3d.pdf', bbox_inches='tight')
     plt.clf()
     plt.scatter(embed[:,0], embed[:,1], c=labels, cmap='viridis')
     plt.title('TSNE labeling post kmeans acc=' + str(round(acc, 2)))
@@ -1015,7 +1000,10 @@ def linear_assignment(learned_labels, index, remap):
     
     gt_temp = np.zeros(len(index))
     for i in range(index.shape[0]):
-        gt_temp[i] = int(gt_data[index[i]])
+        try: 
+            gt_temp[i] = int(gt_data[int(index[i])])
+        except: 
+            gt_temp[i] = int(gt_data[int(index[i][0])])
 
     #Need to remap the resulting SC labels to the correct ones
     gt_labs = np.array(list(set(gt_temp)))
@@ -1098,40 +1086,6 @@ def tsne_means(dir_name, tol=0.05):
         plt.clf()
         tol += 0.025
 
-def prs_make(dir_name):
-    iter_track = [50*i for i in range(0, 50)]
-    prs = Presentation()
-    for i in range(0, 50):
-        try: 
-            os.remove(dir_name + '/iter=' + str(iter_track[i]) + '.pdf')
-        except: 
-            x = 2
-        path = dir_name + '/iter=' + str(iter_track[i]) + '.png'
-        left = Inches(2)
-        top = Inches(1)
-        width = Inches(7)
-        height = Inches(6)
-        try: 
-            prs.slides.add_slide(prs.slide_layouts[0])
-            pic = slide.shapes.add_picture(path, left, top, width, height)
-        except: 
-            break 
-    prs.save(dir_name + '/time_lapse_pres.pptx')
-
-#This function given index builds complement of it 
-def set_complement(dir_name):
-    torch.set_default_dtype(torch.float64) 
-
-    X = list(torch.load(dir_name + '/train_index.pt').numpy())
-    GT = data_loader('gt')
-
-    X_C = list()
-    for i in range(GT.shape[0]):
-        if not (i in X) and (GT[i][0] != 0) and (i != 1045 and i != 1046):
-            X_C.append(i)
-
-    return torch.tensor(np.array(X_C))
-
 def gt_and_mask(remap, mask_marker=0): 
     gt_data = data_loader('gt')
     mask = np.zeros(83*86)
@@ -1153,94 +1107,107 @@ def virid_modify():
     new_cmap.colors[0] = (1, 1, 1, 1)
     return new_cmap
 
-def cooking(dir_name):
-    N = 100
-    X = torch.load(dir_name + '/coeff.pt').numpy()
-    index = torch.load(dir_name + '/train_index.pt').numpy()
+def svm_testing(num_points=200, mode='raw'):
+    data = data_loader('data')
+    all_data = np.zeros((7138, 201)) #12 
+    label = np.zeros(7138)
 
-    Y = np.zeros((X.shape[0] + 2, X.shape[1]))
-    for i in range(X.shape[0]):
-        Y[i,:] = X[i,:]
+    gt = data_loader('gt')
+    for i in range(0, gt.shape[0]):
+        if gt[i] != 0: 
+        #if gt[i] == 10 or gt[i] == 12: 
+            all_data[i,:] = data[i,:]
+            label[i] = gt[i]
+    label_data = all_data[~np.all(all_data == 0, axis=1)]
+    random_integers = [random.randint(0, label_data.shape[0] - 1) for i in range(num_points)]
+    label = label[label != 0]
+    training_labels = label.copy()
+    training_labels = training_labels[random_integers]
+    normal_data = label_data.copy()
+    k = len(label)
+    if mode != 'raw':
+        for i in range(0, k): 
+            if np.sum(normal_data[i,:]) != 0: 
+                normal_data[i,:] /= np.sum(normal_data[i,:])
 
-    for i in range(X.shape[1]): 
-        k1 = math.floor(index[i]/86)
-        k2 = index[i] - k1*86
-        Y[X.shape[0], i] = k1/N
-        Y[X.shape[0] + 1, i] = k2/N
-    
-    remap = {0: 0, 1: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6}
-    gt_data = data_loader('gt')
-    for i in range(gt_data.shape[0]):
-        gt_data[i] = remap.get(gt_data[i][0])
-    
-    gt_temp = np.zeros(len(index))
-    for i in range(index.shape[0]):
-        gt_temp[i] = int(gt_data[index[i]])
+    true_train = normal_data[random_integers]
+    clf = make_pipeline(StandardScaler(), SVC(gamma='auto'))
+    clf.fit(true_train, training_labels)
+    acc = 0
+    for i in range(0, k): 
+        x =  clf.predict([normal_data[i,:]])[0]
+        if x == label[i]:
+            acc += 1
+    print('acc: ', num_points, (acc - len(random_integers))/(k - len(random_integers)))
+    return (acc - len(random_integers))/(k - len(random_integers))
 
-    Y = Y.T
-    # embed = TSNE(n_components=2, learning_rate='auto', init='random', 
-    #              perplexity=25).fit_transform(Y)
-    # plt.scatter(embed[:,0], embed[:,1], c=gt_temp, cmap='viridis')
-    # plt.savefig('embed_cooking')
-    # plt.clf()
+def nn_testing(num_points=100, neighbors=10, type='raw'): 
+    data = data_loader('data')
+    all_data = np.zeros((7138, 201)) #12 
+    label = np.zeros(7138)
 
-    weights = Y @ Y.T
-    for neighbors in [20, 25, 30, 35, 40, 45, 50]: 
-        W = kneighbor_weights(weights, neighbors, constraint='or')
-        labels = spectral_cluster(W, 6)
-        labels = linear_assignment(labels, index, remap)
-        #Gets accuracy score, goes through and checks if the label matches
-        #the gt. 
-        acc = 0
-        train_plot = np.zeros(83*86)
-        for i in range(len(labels)):
-            t = int(index[i])
-            j = labels[i]
-            train_plot[t] = j
-            if gt_data[t] == j:
-                acc += 1
-        acc = acc/len(labels) #Accuracy
-        print('N: ', N, 'Neighbors: ', neighbors, 'Acc:', acc)
-        train_plot = np.reshape(train_plot, (83, 86))  
+    gt = data_loader('gt')
+    for i in range(0, gt.shape[0]):
+        if gt[i] != 0: 
+            all_data[i,:] = data[i,:]
+            label[i] = gt[i]
+    label_data = all_data[~np.all(all_data == 0, axis=1)]
+    label = label[label != 0]
+    random_integers = random.sample(range(0, label_data.shape[0] - 1), num_points)
+    training_labels = label.copy()
+    training_labels = training_labels[random_integers]
 
-        #Makes the plot of the result
-        cmap = virid_modify()
-        plt.imshow(train_plot, cmap=cmap)
-        plt.show()
-        plt.clf()
+    normal_data = label_data.copy()
+    k = len(label)
+    if type != 'raw':
+        for i in range(0, k): 
+            if np.sum(normal_data[i,:]) != 0: 
+                normal_data[i,:] /= np.sum(normal_data[i,:])
+
+    true_train = normal_data[random_integers]
+
+    nbrs = NearestNeighbors(n_neighbors=neighbors).fit(true_train)
+    distances, indices = nbrs.kneighbors(normal_data)
+    index_map = indices.copy()
+    for i in range(indices.shape[0]):
+        for j in range(indices.shape[1]): 
+            index_map[i, j] = label[random_integers[indices[i,j]]]
+    mode_eval = np.zeros(indices.shape[0])
+    for i in range(0, mode_eval.shape[0]): 
+        mode_eval[i] = mode(index_map[i,:])
+
+    acc = 0
+    for i in range(mode_eval.shape[0]): 
+        if mode_eval[i] == label[i]: 
+            acc += 1
+    print('acc: ', acc/mode_eval.shape[0])
+    return acc/mode_eval.shape[0]
 
 
 if __name__ == "__main__":
     print('Imports complete') #Just some default stuff, change dev if using gpus
-    # torch.set_default_dtype(torch.float64) 
+    torch.set_default_dtype(torch.float64) 
     # np.set_printoptions(suppress=True) #Indices are 1045, 1046 of outliers
 
-    #12 is true label 10 is wrong label 
-    X = data_loader('data')
-    Y = data_loader('gt')
-    Y_2 = set(Y.flatten())
-    # print(Y_2)
-    # for i in range(0, len(Y)): 
-    #     if Y[i] == 10: 
-    #         Y[i] = 0
-    # Y = np.reshape(Y, (83, 86))
+    # synthetic_experiments(reg=0.001, lm=False, dir_name='whispers_2', mode='salinas', 
+    #                       sample_size=50)
+    V_WDL = torch.tensor(np.load('whispers_2/atoms.npy'))
+    weights = torch.tensor(np.load('whispers_2/weights.npy'))
+    size = 201
+    samp = 51
+    reg = 0.001
+    #Cost matrix for barycenters
+
+    #Need to save M/M_old for when running WDL 
+    M_old = cost_tensor(size)
+    M = torch.tensor(np.exp(-M_old/reg)) #Kernel
     
-    # plt.imshow(Y)
-    # plt.show()
-    # plt.clf()
-    X = X/X.sum(axis=1)[:,None]
-    X1 = np.zeros((201, 1))
-    X2 = np.zeros((201, 1))
+    #Runs WDL, as it's small, you can set n_restarts/max_iters pretty high
+    barySolver = barycenter(C=M_old, method="bregman", reg=reg, maxiter=1000)
 
-    for i in range(0, X.shape[0]): 
-        K = X[i,:].reshape(-1, 1)
-        if Y[i] == 10: 
-            X1 = np.append(X1, K, axis=1)
-        if Y[i] == 12:
-            X2 = np.append(X2, K, axis=1)
-    print(X1.shape, X2.shape)
-    plt.plot(X1, color='red') #Wrong label that gets split
-    plt.plot(X2, color='blue') #True label
-    plt.show()
-
+    #Reconstruction visualization
+    rec = np.zeros((V_WDL.shape[0], samp))
+    for i in range(weights.shape[1]): #Gets reconstructions
+        rec[:,i] = barySolver(V_WDL, weights[:,i]).numpy().reshape(size,)
+    basic_pdf_plot(rec, savename='fixed_recon.pdf', v_size=51, ylim=[-0.005, 0.04], inv=True)
 
